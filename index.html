@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>飞机大战 - Sky Fighter</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+
+        <!-- HUD Overlay -->
+        <div id="hud" class="hidden">
+            <div id="score-panel">
+                <span class="label">SCORE</span>
+                <span id="score-value">0</span>
+            </div>
+            <div id="high-score-panel">
+                <span class="label">HI</span>
+                <span id="high-score-value">0</span>
+            </div>
+            <div id="lives-panel">
+                <span class="label">HP</span>
+                <div id="hp-bar-track">
+                    <div id="hp-bar-fill"></div>
+                </div>
+            </div>
+            <div id="weapon-panel">
+                <span id="weapon-name">NORMAL</span>
+            </div>
+            <div id="boss-hud" class="hidden">
+                <div id="boss-hp-track">
+                    <div id="boss-hp-fill"></div>
+                </div>
+                <span id="boss-label">BOSS</span>
+            </div>
+            <div id="wave-panel">
+                <span class="label">WAVE</span>
+                <span id="wave-value">1</span>
+            </div>
+        </div>
+
+        <!-- Menu Screen -->
+        <div id="menu-screen" class="screen active">
+            <h1 id="game-title">飞机大战</h1>
+            <h2 id="game-subtitle">SKY FIGHTER</h2>
+            <div id="instructions">
+                <p><strong>WASD / Arrow Keys</strong> - Move</p>
+                <p><strong>Space</strong> - Shoot (auto-fire ON)</p>
+                <p><strong>P</strong> - Pause</p>
+                <p>Collect power-ups to upgrade your arsenal!</p>
+            </div>
+            <button type="button" id="start-btn">START GAME</button>
+            <div id="menu-high-score">High Score: <span id="menu-high-score-val">0</span></div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="game-over-screen" class="screen hidden">
+            <h1 id="go-title">GAME OVER</h1>
+            <div id="go-stats">
+                <p>Final Score: <span id="final-score">0</span></p>
+                <p>Wave Reached: <span id="final-wave">1</span></p>
+                <p>Bosses Defeated: <span id="bosses-defeated">0</span></p>
+                <p>Enemies Destroyed: <span id="enemies-destroyed">0</span></p>
+                <hr>
+                <p id="new-high-score" class="hidden">NEW HIGH SCORE!</p>
+                <p>High Score: <span id="go-high-score">0</span></p>
+            </div>
+            <button type="button" id="restart-btn">PLAY AGAIN</button>
+            <button type="button" id="menu-btn">MAIN MENU</button>
+        </div>
+
+        <!-- Pause Screen -->
+        <div id="pause-screen" class="screen hidden">
+            <h1>PAUSED</h1>
+            <button type="button" id="resume-btn">RESUME</button>
+            <button type="button" id="pause-menu-btn">QUIT TO MENU</button>
+        </div>
+
+        <!-- Boss Warning -->
+        <div id="boss-warning" class="hidden">
+            <h2>WARNING</h2>
+            <h1>BOSS APPROACHING</h1>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+</body>
+</html>
