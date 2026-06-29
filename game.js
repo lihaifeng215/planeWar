@@ -558,12 +558,26 @@ function updateBullets() {
 
         // Check collision with boss
         if (!hit && boss && circleRect(b.x, b.y, b.w / 2, boss.x - boss.w / 2, boss.y - boss.h / 2, boss.w, boss.h)) {
-            boss.hp -= b.damage;
-            spawnParticles(b.x, b.y, 3, b.color, 2, 15, 2);
-            if (boss.hp <= 0) {
-                destroyBoss();
+            // Guardian shield absorbs damage first in updateBullets too
+            if (boss.type === 'guardian' && boss.shield > 0) {
+                boss.shield -= b.damage;
+                boss.flashTimer = 4;
+                spawnParticles(b.x, b.y, 3, '#4488ff', 2, 10, 2);
+                if (!b.isLaser) {
+                    bullets.splice(i, 1);
+                }
+                if (boss.shield <= 0) {
+                    addFloatingText(boss.x, boss.y - 60, 'SHIELD DOWN!', '#4488ff');
+                    spawnParticles(boss.x, boss.y, 25, '#4488ff', 4, 35, 3);
+                }
+            } else {
+                boss.hp -= b.damage;
+                spawnParticles(b.x, b.y, 3, b.color, 2, 15, 2);
+                if (boss.hp <= 0) {
+                    destroyBoss();
+                }
+                hit = true;
             }
-            hit = true;
         }
 
         if (hit && !b.isLaser) {
@@ -689,6 +703,95 @@ const ENEMY_DEFS = {
     fast:   { w: 24, h: 24, hp: 12, speed: 4,   score: 15, color: '#44ffaa', fireRate: 0 },
     bomber: { w: 48, h: 44, hp: 40, speed: 1,   score: 40, color: '#ff4488', fireRate: 60 },
 };
+
+// ==================== BOSS DEFS ====================
+const BOSS_DEFS = {
+    assault: {
+        name: 'ASSAULT',
+        minWave: 2,
+        baseHp: 200,   hpPerWave: 80,
+        baseScore: 200, scorePerWave: 50,
+        w: 100, h: 70,
+        speed: 1,
+        moveAmplitude: 120,
+        patterns: ['aimed', 'spiral', 'spread'],
+        patternInterval: 60,
+        fightPhases: 1,
+        bulletSpeed: 4,
+        bulletDensity: 1,  // multiplier — spread count = 12 * density
+        color: '#cc2222',
+        darkColor: '#881111',
+        accentColor: '#ff6644',
+    },
+    guardian: {
+        name: 'GUARDIAN',
+        minWave: 6,
+        baseHp: 400,   hpPerWave: 120,
+        baseScore: 500, scorePerWave: 100,
+        w: 90, h: 90,
+        speed: 1.2,
+        moveAmplitude: 100,
+        patterns: ['shield_spin', 'charge_burst'],
+        patternInterval: 50,
+        fightPhases: 1,
+        bulletSpeed: 3.5,
+        bulletDensity: 1,
+        color: '#2244cc',
+        darkColor: '#112288',
+        accentColor: '#4488ff',
+        shieldHp: 60,       // rotating shield blocks total HP
+        shieldCount: 6,
+    },
+    destroyer: {
+        name: 'DESTROYER',
+        minWave: 10,
+        baseHp: 800,   hpPerWave: 150,
+        baseScore: 1000, scorePerWave: 150,
+        w: 120, h: 90,
+        speed: 0.8,
+        moveAmplitude: 80,
+        patterns: ['homing', 'laser_sweep', 'spread_wall'],
+        patternInterval: 45,
+        fightPhases: 2,     // phase 2 at HP < 50%
+        bulletSpeed: 4,
+        bulletDensity: 1,
+        color: '#8822cc',
+        darkColor: '#441166',
+        accentColor: '#aa44ff',
+    },
+    mothership: {
+        name: 'MOTHERSHIP',
+        minWave: 14,
+        baseHp: 1500,  hpPerWave: 200,
+        baseScore: 2000, scorePerWave: 200,
+        w: 140, h: 110,
+        speed: 0.5,
+        moveAmplitude: 50,
+        patterns: ['spawn_minions', 'full_screen', 'aimed_barrage'],
+        patternInterval: 40,
+        fightPhases: 3,     // phase 2 at HP <66%, phase 3 at HP <33%
+        bulletSpeed: 4.5,
+        bulletDensity: 1,
+        color: '#ccaa22',
+        darkColor: '#886611',
+        accentColor: '#ffdd44',
+    },
+};
+
+function getBossType() {
+    if (wave >= BOSS_DEFS.mothership.minWave) return 'mothership';
+    if (wave >= BOSS_DEFS.destroyer.minWave)  return 'destroyer';
+    if (wave >= BOSS_DEFS.guardian.minWave)   return 'guardian';
+    return 'assault';
+}
+
+function getBossBulletSpeed(def) {
+    return def.bulletSpeed + Math.floor(wave / 4) * 0.5;
+}
+
+function getBossDensity(def) {
+    return def.bulletDensity + Math.floor(wave / 6);
+}
 
 function createEnemy(type, x, y) {
     const def = ENEMY_DEFS[type];
@@ -860,27 +963,324 @@ function destroyEnemy(index) {
 
 // ==================== BOSS ====================
 function createBoss() {
+    const type = getBossType();
+    const def = BOSS_DEFS[type];
+    const hp = def.baseHp + wave * def.hpPerWave;
     return {
+        ...def,
+        type,
         x: GAME_WIDTH / 2,
         y: -80,
-        w: 100,
-        h: 70,
-        hp: 200 + wave * 80,
-        maxHp: 200 + wave * 80,
-        speed: 1,
-        phase: 'enter', // enter | fight | flee
+        hp: hp,
+        maxHp: hp,
+        score: def.baseScore + wave * def.scorePerWave,
+        phase: 'enter',       // enter | fight | flee
+        fightPhase: 1,        // sub-phase for multi-phase bosses
         timer: 0,
         pattern: 0,
         patternTimer: 0,
         flashTimer: 0,
-        score: 200 + wave * 50,
+        shield: def.shieldHp || 0,
+        maxShield: def.shieldHp || 0,
+        shieldAngle: 0,       // current angle of rotating shield
+        chargeProgress: 0,    // charge-up progress for charge_burst
+        laserAngle: 0,        // current angle for laser_sweep
+        laserDir: 1,          // sweep direction
+        burstCount: 0,        // used for aimed_barrage burst sequencing
     };
 }
 
+// ==================== BOSS MOVEMENT ====================
+function updateBossMovement() {
+    if (!boss) return;
+
+    if (boss.type === 'assault') {
+        boss.x = GAME_WIDTH / 2 + Math.sin(boss.timer * 0.02) * boss.moveAmplitude;
+    } else if (boss.type === 'guardian') {
+        // Side-to-side with occasional short dash
+        boss.x = GAME_WIDTH / 2 + Math.sin(boss.timer * 0.025) * boss.moveAmplitude;
+        // Slight vertical bob
+        boss.y = 80 + Math.sin(boss.timer * 0.04) * 20;
+        // Random dash: stop sine, lunge toward player
+        if (boss.timer % 200 > 190) {
+            const dx = player.x - boss.x;
+            boss.x += Math.sign(dx) * 3;
+        }
+    } else if (boss.type === 'destroyer') {
+        boss.x = GAME_WIDTH / 2 + Math.sin(boss.timer * 0.015) * boss.moveAmplitude;
+        boss.y = 70 + Math.sin(boss.timer * 0.03) * 25;
+    } else if (boss.type === 'mothership') {
+        // Almost stationary, slight drift
+        boss.x = GAME_WIDTH / 2 + Math.sin(boss.timer * 0.008) * boss.moveAmplitude;
+        boss.y = 65 + Math.sin(boss.timer * 0.012) * 10;
+    }
+}
+
+// ==================== BOSS ATTACKS: ASSAULT ====================
+function updateBossAssault() {
+    boss.patternTimer++;
+    if (boss.patternTimer % boss.patternInterval === 0) {
+        boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+    }
+    const bSpeed = getBossBulletSpeed(boss);
+    const density = getBossDensity(boss);
+
+    if (boss.pattern === 0) {
+        // Aimed shots
+        if (boss.timer % Math.max(8, 20 - wave) === 0) {
+            const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
+            enemyBullets.push({
+                x: boss.x, y: boss.y + boss.h / 2,
+                vx: Math.cos(angle) * bSpeed,
+                vy: Math.sin(angle) * bSpeed,
+                r: 5, color: '#ff4444',
+            });
+        }
+    } else if (boss.pattern === 1) {
+        // Spiral
+        if (boss.timer % 8 === 0) {
+            const a = boss.timer * 0.15;
+            enemyBullets.push({
+                x: boss.x, y: boss.y + boss.h / 2,
+                vx: Math.cos(a) * (bSpeed * 0.75),
+                vy: Math.sin(a) * (bSpeed * 0.75),
+                r: 4, color: '#ff8844',
+            });
+        }
+    } else {
+        // Spread burst
+        const interval = Math.max(20, 40 - wave * 2);
+        if (boss.timer % interval === 0) {
+            const count = Math.floor(12 * density);
+            for (let a = 0; a < count; a++) {
+                const angle = (a / count) * Math.PI * 2;
+                enemyBullets.push({
+                    x: boss.x, y: boss.y + boss.h / 2,
+                    vx: Math.cos(angle) * (bSpeed * 0.625),
+                    vy: Math.sin(angle) * (bSpeed * 0.625),
+                    r: 3, color: '#ffaa44',
+                });
+            }
+        }
+    }
+}
+
+// ==================== BOSS ATTACKS: GUARDIAN ====================
+function updateBossGuardian() {
+    boss.patternTimer++;
+    if (boss.patternTimer % boss.patternInterval === 0) {
+        boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+    }
+    // Rotate the shield
+    boss.shieldAngle += 0.03;
+
+    const bSpeed = getBossBulletSpeed(boss);
+    const density = getBossDensity(boss);
+
+    if (boss.pattern === 0) {
+        // shield_spin: occasional aimed bullets from shield blocks
+        if (boss.timer % Math.max(6, 15 - wave) === 0) {
+            const count = boss.shieldCount || 6;
+            for (let i = 0; i < count; i++) {
+                const a = boss.shieldAngle + (i / count) * Math.PI * 2;
+                const sx = boss.x + Math.cos(a) * 55;
+                const sy = boss.y + Math.sin(a) * 55;
+                const angle = Math.atan2(player.y - sy, player.x - sx);
+                enemyBullets.push({
+                    x: sx, y: sy,
+                    vx: Math.cos(angle) * bSpeed,
+                    vy: Math.sin(angle) * bSpeed,
+                    r: 3, color: '#4488ff',
+                });
+            }
+        }
+    } else {
+        // charge_burst
+        boss.chargeProgress++;
+        // Charging visual — boss slows/stops, glow builds
+        if (boss.chargeProgress < 90) {
+            // charging... emit warning particles every 30 frames
+            if (boss.chargeProgress % 30 === 0) {
+                spawnParticles(boss.x, boss.y + boss.h / 2, 8, '#44aaff', 2, 20, 2);
+            }
+        } else {
+            // BURST! Fire all around
+            const count = Math.floor(20 * density);
+            for (let a = 0; a < count; a++) {
+                const angle = (a / count) * Math.PI * 2;
+                enemyBullets.push({
+                    x: boss.x, y: boss.y,
+                    vx: Math.cos(angle) * (bSpeed * 1.2),
+                    vy: Math.sin(angle) * (bSpeed * 1.2),
+                    r: 4, color: '#aaddff',
+                });
+            }
+            boss.chargeProgress = 0;
+            // Force pattern switch after burst
+            boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+            boss.patternTimer = 0;
+        }
+    }
+}
+
+// ==================== BOSS ATTACKS: DESTROYER ====================
+function updateBossDestroyer() {
+    boss.patternTimer++;
+    const phaseMult = boss.fightPhase >= 2 ? 1.3 : 1;
+    const interval = Math.max(30, boss.patternInterval - wave);
+    if (boss.patternTimer % Math.floor(interval / phaseMult) === 0) {
+        boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+    }
+
+    const bSpeed = getBossBulletSpeed(boss) * phaseMult;
+    const density = getBossDensity(boss);
+
+    if (boss.pattern === 0) {
+        // homing: slow bullets that curve toward player
+        if (boss.timer % Math.max(15, 40 - wave * 2) === 0) {
+            for (let i = -1; i <= 1; i++) {
+                const a = Math.atan2(player.y - boss.y, player.x - boss.x) + i * 0.3;
+                enemyBullets.push({
+                    x: boss.x, y: boss.y + boss.h / 2,
+                    vx: Math.cos(a) * bSpeed * 0.5,
+                    vy: Math.sin(a) * bSpeed * 0.5,
+                    r: 4, color: '#cc66ff',
+                    homing: true,
+                    turnRate: 0.03,
+                });
+            }
+        }
+    } else if (boss.pattern === 1) {
+        // laser_sweep
+        boss.laserAngle += 0.03 * boss.laserDir * phaseMult;
+        if (boss.laserAngle > 1.2) boss.laserDir = -1;
+        if (boss.laserAngle < -1.2) boss.laserDir = 1;
+
+        if (boss.timer % 6 === 0) {
+            const a = Math.PI / 2 + boss.laserAngle;
+            enemyBullets.push({
+                x: boss.x + Math.cos(boss.laserAngle) * 30,
+                y: boss.y + boss.h / 2,
+                vx: Math.cos(a) * bSpeed * 1.5,
+                vy: Math.sin(a) * bSpeed * 1.5,
+                r: 6, color: '#ff44ff',
+            });
+        }
+    } else {
+        // spread_wall: many bullets in an arc downward, creating a "wall"
+        if (boss.timer % Math.max(10, 30 - wave) === 0) {
+            const count = Math.floor(10 * density);
+            const spreadAngle = Math.PI * 0.6 * phaseMult;
+            for (let i = 0; i < count; i++) {
+                const a = Math.PI / 2 - spreadAngle / 2 + (i / (count - 1)) * spreadAngle;
+                enemyBullets.push({
+                    x: boss.x, y: boss.y + boss.h / 2,
+                    vx: Math.cos(a) * bSpeed * 0.9,
+                    vy: Math.sin(a) * bSpeed * 0.9,
+                    r: 3, color: '#dd88ff',
+                });
+            }
+        }
+    }
+}
+
+// ==================== BOSS ATTACKS: MOTHERSHIP ====================
+function updateBossMothership() {
+    boss.patternTimer++;
+    const phaseMult = boss.fightPhase >= 2 ? 1.25 : 1;
+    const interval = Math.max(25, boss.patternInterval - wave);
+    if (boss.patternTimer % Math.floor(interval / phaseMult) === 0) {
+        boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+    }
+
+    const bSpeed = getBossBulletSpeed(boss) * phaseMult;
+    const density = getBossDensity(boss);
+
+    if (boss.pattern === 0) {
+        // spawn_minions: summon small enemies
+        if (boss.timer % Math.max(60, 150 - wave * 5) === 0) {
+            const count = 2 + Math.floor(wave / 5);
+            for (let i = 0; i < count; i++) {
+                const spawnTypes = wave >= 10 ? ['small', 'small', 'fast', 'medium'] : ['small', 'small', 'fast'];
+                const type = spawnTypes[Math.floor(Math.random() * spawnTypes.length)];
+                const ex = boss.x + (Math.random() - 0.5) * 200;
+                const ey = boss.y + Math.random() * 40;
+                enemies.push(createEnemy(type, ex, ey));
+            }
+        }
+    } else if (boss.pattern === 1) {
+        // full_screen: multi-layer circular barrage
+        if (boss.timer % Math.max(20, 50 - wave * 2) === 0) {
+            const layers = boss.fightPhase >= 3 ? 3 : 2;
+            for (let layer = 0; layer < layers; layer++) {
+                const count = Math.floor((12 + layer * 4) * density);
+                const speed = bSpeed * (0.5 + layer * 0.3);
+                const offset = layer * 0.3;
+                for (let i = 0; i < count; i++) {
+                    const a = (i / count) * Math.PI * 2 + offset;
+                    enemyBullets.push({
+                        x: boss.x, y: boss.y,
+                        vx: Math.cos(a) * speed,
+                        vy: Math.sin(a) * speed,
+                        r: 3, color: layer === 0 ? '#ffcc44' : layer === 1 ? '#ffaa22' : '#ff8800',
+                    });
+                }
+            }
+        }
+    } else {
+        // aimed_barrage: rapid-fire aimed burst
+        if (boss.timer % Math.max(8, 18 - wave) === 0) {
+            boss.burstCount = (boss.burstCount || 0) + 1;
+            const count = Math.floor(8 * density);
+            for (let i = 0; i < count; i++) {
+                const spread = (i - (count - 1) / 2) * 0.08;
+                const angle = Math.atan2(player.y - boss.y, player.x - boss.x) + spread;
+                enemyBullets.push({
+                    x: boss.x, y: boss.y + boss.h / 2,
+                    vx: Math.cos(angle) * bSpeed * 1.4,
+                    vy: Math.sin(angle) * bSpeed * 1.4,
+                    r: 4, color: '#ffdd44',
+                });
+            }
+            if (boss.burstCount >= 6 && boss.patterns.length > 1) {
+                boss.burstCount = 0;
+                boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+                boss.patternTimer = 0;
+            }
+        }
+    }
+
+    // Phase 3: simultaneous second pattern occasionally
+    if (boss.fightPhase >= 3 && boss.timer % 20 === 0) {
+        const extraPattern = (boss.pattern + 1) % boss.patterns.length;
+        if (extraPattern === 0 && boss.timer % 40 === 0) {
+            // Extra aimed shots from edges
+            for (let side = -1; side <= 1; side += 2) {
+                const angle = Math.atan2(player.y - boss.y, player.x - (boss.x + side * 50));
+                enemyBullets.push({
+                    x: boss.x + side * 50, y: boss.y,
+                    vx: Math.cos(angle) * bSpeed,
+                    vy: Math.sin(angle) * bSpeed,
+                    r: 3, color: '#ffaa44',
+                });
+            }
+        }
+    }
+}
+
+// ==================== BOSS MAIN UPDATE ====================
 function updateBoss() {
     if (!boss) return;
     boss.timer++;
     boss.flashTimer = Math.max(0, boss.flashTimer - 1);
+
+    // Fight phase advancement for multi-phase bosses
+    const fp = boss.fightPhases || 1;
+    if (fp >= 3 && boss.hp <= boss.maxHp * 0.33) {
+        boss.fightPhase = 3;
+    } else if (fp >= 2 && boss.hp <= boss.maxHp * 0.5) {
+        boss.fightPhase = 2;
+    }
 
     if (boss.phase === 'enter') {
         boss.y += 2;
@@ -889,50 +1289,17 @@ function updateBoss() {
             boss.timer = 0;
         }
     } else if (boss.phase === 'fight') {
-        // Move side to side
-        boss.x = GAME_WIDTH / 2 + Math.sin(boss.timer * 0.02) * 120;
+        updateBossMovement();
 
-        // Attack patterns
-        boss.patternTimer++;
-        if (boss.patternTimer % 60 === 0) {
-            boss.pattern = (boss.pattern + 1) % 3;
-        }
-
-        if (boss.pattern === 0) {
-            // Aimed shots
-            if (boss.timer % 20 === 0) {
-                const angle = Math.atan2(player.y - boss.y, player.x - boss.x);
-                enemyBullets.push({
-                    x: boss.x, y: boss.y + boss.h / 2,
-                    vx: Math.cos(angle) * 4,
-                    vy: Math.sin(angle) * 4,
-                    r: 5, color: '#ff4444',
-                });
-            }
-        } else if (boss.pattern === 1) {
-            // Spiral
-            if (boss.timer % 8 === 0) {
-                const a = boss.timer * 0.15;
-                enemyBullets.push({
-                    x: boss.x, y: boss.y + boss.h / 2,
-                    vx: Math.cos(a) * 3,
-                    vy: Math.sin(a) * 3,
-                    r: 4, color: '#ff8844',
-                });
-            }
-        } else {
-            // Spread burst
-            if (boss.timer % 40 === 0) {
-                for (let a = 0; a < 12; a++) {
-                    const angle = (a / 12) * Math.PI * 2;
-                    enemyBullets.push({
-                        x: boss.x, y: boss.y + boss.h / 2,
-                        vx: Math.cos(angle) * 2.5,
-                        vy: Math.sin(angle) * 2.5,
-                        r: 3, color: '#ffaa44',
-                    });
-                }
-            }
+        // Dispatch attacks by type
+        if (boss.type === 'assault') {
+            updateBossAssault();
+        } else if (boss.type === 'guardian') {
+            updateBossGuardian();
+        } else if (boss.type === 'destroyer') {
+            updateBossDestroyer();
+        } else if (boss.type === 'mothership') {
+            updateBossMothership();
         }
 
         // Check if fleeing
@@ -956,42 +1323,36 @@ function updateBoss() {
         }
     }
 
-    // Collision with player bullets (skip if boss was nulled above)
-    if (!boss) return;
-    for (let i = bullets.length - 1; i >= 0; i--) {
-        const b = bullets[i];
-        if (circleRect(b.x, b.y, b.w / 2, boss.x - boss.w / 2, boss.y - boss.h / 2, boss.w, boss.h)) {
-            boss.hp -= b.damage;
-            boss.flashTimer = 4;
-            spawnParticles(b.x, b.y, 2, b.color, 2, 10, 2);
-            if (!b.isLaser && !b.isMissile) {
-                bullets.splice(i, 1);
-            }
-            if (boss.hp <= 0) {
-                destroyBoss();
-                return;
-            }
-        }
-    }
-
-    // Collision with player
+    // Collision with player (bullet-boss collision handled in updateBullets)
     if (boss && boss.phase === 'fight' && rectCollision(
         boss.x - boss.w / 2, boss.y - boss.h / 2, boss.w, boss.h,
         player.x - player.w / 2, player.y - player.h / 2, player.w, player.h
     )) {
         hitPlayer();
     }
+
+    // Update enemy bullets' homing behavior for destroyer bullets
+    for (const eb of enemyBullets) {
+        if (eb.homing) {
+            const angle = Math.atan2(player.y - eb.y, player.x - eb.x);
+            const currentAngle = Math.atan2(eb.vy, eb.vx);
+            let diff = angle - currentAngle;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            const turn = Math.sign(diff) * Math.min(Math.abs(diff), eb.turnRate);
+            const newAngle = currentAngle + turn;
+            const spd = Math.hypot(eb.vx, eb.vy);
+            eb.vx = Math.cos(newAngle) * spd;
+            eb.vy = Math.sin(newAngle) * spd;
+        }
+    }
 }
 
-function drawBoss() {
-    if (!boss) return;
-    ctx.save();
-    ctx.translate(boss.x, boss.y);
+function drawBossBodyAssault() {
+    const col = boss.flashTimer > 0 ? '#ffffff' : boss.color;
+    const darkCol = boss.flashTimer > 0 ? '#ffaaaa' : boss.darkColor;
 
-    const col = boss.flashTimer > 0 ? '#ffffff' : '#cc2222';
-    const darkCol = boss.flashTimer > 0 ? '#ffaaaa' : '#881111';
-
-    // Main body
+    // Main body - angular diamond/arrow shape
     ctx.fillStyle = col;
     ctx.beginPath();
     ctx.moveTo(0, -boss.h / 2);
@@ -1012,7 +1373,7 @@ function drawBoss() {
     ctx.beginPath();
     ctx.arc(0, 0, 15, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#ff6644';
+    ctx.fillStyle = boss.accentColor;
     ctx.beginPath();
     ctx.arc(0, 0, 8, 0, Math.PI * 2);
     ctx.fill();
@@ -1022,7 +1383,213 @@ function drawBoss() {
     ctx.fillRect(-boss.w / 2 - 10, boss.h / 4 - 5, 15, 10);
     ctx.fillRect(boss.w / 2 - 5, boss.h / 4 - 5, 15, 10);
 
-    // HP bar above boss
+    // Engine glow
+    ctx.fillStyle = '#ff6644';
+    ctx.shadowColor = '#ff4400';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(0, boss.h / 2 + 4, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+}
+
+function drawBossBodyGuardian() {
+    const col = boss.flashTimer > 0 ? '#ffffff' : boss.color;
+    const darkCol = boss.flashTimer > 0 ? '#aaccff' : boss.darkColor;
+
+    // Hexagonal body
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+        const angle = (i / 6) * Math.PI * 2 - Math.PI / 2;
+        const px = Math.cos(angle) * boss.w / 2;
+        const py = Math.sin(angle) * boss.h / 2;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#4488ff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Inner core
+    ctx.fillStyle = darkCol;
+    ctx.beginPath();
+    ctx.arc(0, 0, 18, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = boss.accentColor;
+    ctx.beginPath();
+    ctx.arc(0, 0, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rotating shield ring
+    if (boss.shield > 0) {
+        for (let i = 0; i < (boss.shieldCount || 6); i++) {
+            const a = boss.shieldAngle + (i / (boss.shieldCount || 6)) * Math.PI * 2;
+            const sx = Math.cos(a) * 55;
+            const sy = Math.sin(a) * 55;
+            const shieldAlpha = 0.4 + (boss.shield / boss.maxShield) * 0.5;
+            ctx.fillStyle = `rgba(68, 136, 255, ${shieldAlpha})`;
+            ctx.strokeStyle = `rgba(136, 200, 255, ${shieldAlpha + 0.2})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(sx, sy, 10, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
+
+    // Charge glow
+    if (boss.chargeProgress > 0 && boss.chargeProgress < 90) {
+        const chargeRatio = boss.chargeProgress / 90;
+        ctx.fillStyle = `rgba(68, 170, 255, ${chargeRatio * 0.3})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, 40 + chargeRatio * 20, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawBossBodyDestroyer() {
+    const col = boss.flashTimer > 0 ? '#ffffff' : boss.color;
+    const darkCol = boss.flashTimer > 0 ? '#cc88ff' : boss.darkColor;
+    const phaseGlow = boss.fightPhase >= 2 ? 'rgba(255, 100, 255, 0.3)' : 'rgba(170, 68, 255, 0.2)';
+
+    // Large angular body
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(0, -boss.h / 2);
+    ctx.lineTo(boss.w / 2, -boss.h / 4);
+    ctx.lineTo(boss.w / 2 + 20, 0);
+    ctx.lineTo(boss.w / 3 + 10, boss.h / 2);
+    ctx.lineTo(-boss.w / 3 - 10, boss.h / 2);
+    ctx.lineTo(-boss.w / 2 - 20, 0);
+    ctx.lineTo(-boss.w / 2, -boss.h / 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = '#aa44ff';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Phase 2 aura
+    if (boss.fightPhase >= 2) {
+        ctx.strokeStyle = `rgba(255, 100, 255, ${0.3 + Math.sin(boss.timer * 0.1) * 0.2})`;
+        ctx.lineWidth = 4;
+        ctx.stroke();
+    }
+
+    // Inner core
+    const coreGrad = ctx.createRadialGradient(0, 0, 2, 0, 0, 20);
+    coreGrad.addColorStop(0, boss.accentColor);
+    coreGrad.addColorStop(1, darkCol);
+    ctx.fillStyle = coreGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Cannon pods
+    ctx.fillStyle = darkCol;
+    ctx.fillRect(-boss.w / 2 - 12, -boss.h / 4, 18, 14);
+    ctx.fillRect(boss.w / 2 - 6, -boss.h / 4, 18, 14);
+    // Front cannon
+    ctx.fillStyle = col;
+    ctx.fillRect(-5, boss.h / 2 - 10, 10, 18);
+
+    // Engine glow
+    ctx.fillStyle = boss.fightPhase >= 2 ? '#ff66ff' : '#aa44ff';
+    ctx.shadowColor = boss.fightPhase >= 2 ? '#ff44ff' : '#8822cc';
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(-15, boss.h / 2 + 6, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(15, boss.h / 2 + 6, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+}
+
+function drawBossBodyMothership() {
+    const col = boss.flashTimer > 0 ? '#ffffff' : boss.color;
+    const darkCol = boss.flashTimer > 0 ? '#ffddaa' : boss.darkColor;
+
+    // Oval/ellipse body
+    const bodyGrad = ctx.createRadialGradient(0, -10, 10, 0, 0, boss.w / 2);
+    bodyGrad.addColorStop(0, boss.accentColor);
+    bodyGrad.addColorStop(0.6, col);
+    bodyGrad.addColorStop(1, darkCol);
+    ctx.fillStyle = bodyGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, boss.w / 2, boss.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = boss.accentColor;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Phase auras
+    if (boss.fightPhase >= 2) {
+        ctx.strokeStyle = `rgba(255, 200, 50, ${0.2 + Math.sin(boss.timer * 0.08) * 0.15})`;
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, boss.w / 2 + 12, boss.h / 2 + 8, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+    if (boss.fightPhase >= 3) {
+        ctx.strokeStyle = `rgba(255, 100, 30, ${0.25 + Math.sin(boss.timer * 0.12 + 1) * 0.2})`;
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, boss.w / 2 + 22, boss.h / 2 + 16, 0, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+
+    // Turret mounts (4 around the body)
+    const turretCount = 4;
+    for (let i = 0; i < turretCount; i++) {
+        const a = (i / turretCount) * Math.PI * 2 + boss.timer * 0.01;
+        const tx = Math.cos(a) * boss.w / 2 * 0.8;
+        const ty = Math.sin(a) * boss.h / 2 * 0.8;
+        ctx.fillStyle = darkCol;
+        ctx.strokeStyle = boss.accentColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(tx, ty, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Turret barrel pointing outward
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(tx + Math.cos(a) * 16, ty + Math.sin(a) * 16);
+        ctx.stroke();
+    }
+
+    // Center eye/core
+    const eyeGrad = ctx.createRadialGradient(0, 0, 3, 0, 0, 16);
+    eyeGrad.addColorStop(0, '#ffffff');
+    eyeGrad.addColorStop(0.3, '#ffdd44');
+    eyeGrad.addColorStop(1, '#aa6600');
+    ctx.fillStyle = eyeGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 16, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Engine glow at bottom
+    ctx.fillStyle = '#ffaa00';
+    ctx.shadowColor = '#ff8800';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.arc(-20, boss.h / 2 + 4, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(0, boss.h / 2 + 6, 8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(20, boss.h / 2 + 4, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+}
+
+function drawBossHPBar() {
     const barW = boss.w + 20;
     const barH = 8;
     const barY = -boss.h / 2 - 18;
@@ -1034,6 +1601,25 @@ function drawBoss() {
     ctx.strokeStyle = '#ff6666';
     ctx.lineWidth = 1;
     ctx.strokeRect(-barW / 2, barY, barW, barH);
+}
+
+function drawBoss() {
+    if (!boss) return;
+    ctx.save();
+    ctx.translate(boss.x, boss.y);
+
+    if (boss.type === 'assault') {
+        drawBossBodyAssault();
+    } else if (boss.type === 'guardian') {
+        drawBossBodyGuardian();
+    } else if (boss.type === 'destroyer') {
+        drawBossBodyDestroyer();
+    } else if (boss.type === 'mothership') {
+        drawBossBodyMothership();
+    }
+
+    // HP bar above boss
+    drawBossHPBar();
 
     ctx.restore();
 }
@@ -1249,15 +1835,25 @@ function spawnWaveEnemy() {
 function startBossFight() {
     bossWarningTimer = 180; // 3 seconds warning
     bossActive = true;
+    // Pre-determine boss type for warning text
+    const bType = getBossType();
+    const def = BOSS_DEFS[bType];
+    const warningH1 = bossWarning.querySelector('h1');
+    if (warningH1) warningH1.textContent = `${def.name} APPROACHING`;
 }
 
 function updateBossWarning() {
     if (bossWarningTimer > 0) {
         bossWarningTimer--;
-        bossWarning.classList.toggle('hidden', bossWarningTimer <= 0);
         if (bossWarningTimer <= 0) {
+            bossWarning.classList.add('hidden');
             boss = createBoss();
             bossHud.classList.remove('hidden');
+            // Update boss HUD with name
+            const bossLabel = document.getElementById('boss-label');
+            if (bossLabel) bossLabel.textContent = boss.name || 'BOSS';
+        } else {
+            bossWarning.classList.remove('hidden');
         }
     }
 }
@@ -1294,6 +1890,12 @@ function updateHUD() {
     // Boss HP
     if (boss) {
         bossHpFill.style.width = `${(boss.hp / boss.maxHp) * 100}%`;
+        const bossLabel = document.getElementById('boss-label');
+        if (bossLabel) {
+            const fightPhaseText = boss.fightPhase > 1 ? ` P${boss.fightPhase}` : '';
+            const shieldText = boss.shield > 0 ? ` [SHIELD ${Math.ceil(boss.shield)}]` : '';
+            bossLabel.textContent = `${boss.name || 'BOSS'}${fightPhaseText}${shieldText}`;
+        }
     }
 }
 
