@@ -563,7 +563,7 @@ function updateBullets() {
                 boss.shield -= b.damage;
                 boss.flashTimer = 4;
                 spawnParticles(b.x, b.y, 3, '#4488ff', 2, 10, 2);
-                if (!b.isLaser) {
+                if (!b.isLaser && !b.isMissile) {
                     bullets.splice(i, 1);
                 }
                 if (boss.shield <= 0) {
@@ -572,6 +572,7 @@ function updateBullets() {
                 }
             } else {
                 boss.hp -= b.damage;
+                boss.flashTimer = 4;
                 spawnParticles(b.x, b.y, 3, b.color, 2, 15, 2);
                 if (boss.hp <= 0) {
                     destroyBoss();
@@ -1070,6 +1071,8 @@ function updateBossGuardian() {
     boss.patternTimer++;
     if (boss.patternTimer % boss.patternInterval === 0) {
         boss.pattern = (boss.pattern + 1) % boss.patterns.length;
+        // Reset charge progress when switching away from charge_burst
+        if (boss.pattern === 0) boss.chargeProgress = 0;
     }
     // Rotate the shield
     boss.shieldAngle += 0.03;
@@ -1453,7 +1456,6 @@ function drawBossBodyGuardian() {
 function drawBossBodyDestroyer() {
     const col = boss.flashTimer > 0 ? '#ffffff' : boss.color;
     const darkCol = boss.flashTimer > 0 ? '#cc88ff' : boss.darkColor;
-    const phaseGlow = boss.fightPhase >= 2 ? 'rgba(255, 100, 255, 0.3)' : 'rgba(170, 68, 255, 0.2)';
 
     // Large angular body
     ctx.fillStyle = col;
