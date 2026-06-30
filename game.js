@@ -11,6 +11,12 @@ const weaponName = document.getElementById('weapon-name');
 const bossHud = document.getElementById('boss-hud');
 const bossHpFill = document.getElementById('boss-hp-fill');
 const waveValue = document.getElementById('wave-value');
+const shieldBarTrack = document.getElementById('shield-bar-track');
+const shieldBarFill = document.getElementById('shield-bar-fill');
+const weaponIcon = document.getElementById('weapon-icon');
+const weaponLevel = document.getElementById('weapon-level');
+const comboPanel = document.getElementById('combo-panel');
+const comboCountEl = document.getElementById('combo-count');
 const menuScreen = document.getElementById('menu-screen');
 const gameOverScreen = document.getElementById('game-over-screen');
 const pauseScreen = document.getElementById('pause-screen');
@@ -20,6 +26,8 @@ const restartBtn = document.getElementById('restart-btn');
 const menuBtn = document.getElementById('menu-btn');
 const resumeBtn = document.getElementById('resume-btn');
 const pauseMenuBtn = document.getElementById('pause-menu-btn');
+const muteBtnMenu = document.getElementById('mute-btn-menu');
+const muteBtnHud = document.getElementById('mute-btn-hud');
 const menuHighScoreVal = document.getElementById('menu-high-score-val');
 const finalScore = document.getElementById('final-score');
 const finalWave = document.getElementById('final-wave');
@@ -50,6 +58,207 @@ const POWERUP_TYPES = {
 
 const WEAPON_NAMES = ['NORMAL', 'SPREAD', 'LASER', 'MISSILE', 'HYBRID'];
 
+// ==================== SOUND MANAGER ====================
+const SoundManager = {
+    ctx: null,
+    masterGain: null,
+    muted: localStorage.getItem('skyFighterMuted') === 'true',
+    volume: 0.4,
+    activeNodes: 0,
+    MAX_CONCURRENT: 10,
+
+    init() {
+        if (this.ctx) return;
+        try {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this.masterGain = this.ctx.createGain();
+            this.masterGain.gain.value = this.muted ? 0 : this.volume;
+            this.masterGain.connect(this.ctx.destination);
+        } catch (e) {
+            console.warn('Web Audio API not supported');
+        }
+    },
+
+    resume() {
+        if (this.ctx && this.ctx.state === 'suspended') {
+            this.ctx.resume();
+        }
+    },
+
+    toggleMute() {
+        this.muted = !this.muted;
+        localStorage.setItem('skyFighterMuted', this.muted.toString());
+        if (this.masterGain) {
+            this.masterGain.gain.setTargetAtTime(this.muted ? 0 : this.volume, this.ctx.currentTime, 0.05);
+        }
+        return this.muted;
+    },
+
+    _play(oscConfig, gainConfig, duration) {
+        if (!this.ctx || this.muted || this.activeNodes >= this.MAX_CONCURRENT) return;
+        this.resume();
+
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = oscConfig.type || 'sine';
+        osc.frequency.setValueAtTime(oscConfig.freq || 440, now);
+        if (oscConfig.freqEnd) {
+            if (oscConfig.freqEnd <= 0) {
+                osc.frequency.linearRampToValueAtTime(1, now + (duration || 0.1));
+            } else {
+                osc.frequency.exponentialRampToValueAtTime(oscConfig.freqEnd, now + (duration || 0.1));
+            }
+        }
+        if (oscConfig.freqSlide) osc.frequency.linearRampToValueAtTime(oscConfig.freqSlide, now + (duration || 0.1));
+
+        gain.gain.setValueAtTime(gainConfig.start || 0.3, now);
+        gain.gain.exponentialRampToValueAtTime(gainConfig.end || 0.001, now + (duration || 0.1));
+
+        osc.connect(gain);
+        gain.connect(this.masterGain);
+
+        this.activeNodes++;
+        osc.start(now);
+        osc.stop(now + (duration || 0.1));
+        osc.onended = () => { this.activeNodes--; };
+    },
+
+    _playNoise(duration, gainStart, gainEnd) {
+        if (!this.ctx || this.muted || this.activeNodes >= this.MAX_CONCURRENT) return;
+        this.resume();
+
+        const now = this.ctx.currentTime;
+        const bufferSize = this.ctx.sampleRate * duration;
+        const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(gainStart || 0.3, now);
+        gain.gain.exponentialRampToValueAtTime(gainEnd || 0.001, now + duration);
+
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 800;
+
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.masterGain);
+
+        this.activeNodes++;
+        source.start(now);
+        source.stop(now + duration);
+        source.onended = () => { this.activeNodes--; };
+    },
+
+    // --- Specific sound effects ---
+    shootNormal() {
+        this._play({ type: 'square', freq: 880, freqEnd: 440 }, { start: 0.12, end: 0.001 }, 0.06);
+    },
+    shootSpread() {
+        this._play({ type: 'square', freq: 1200, freqEnd: 600 }, { start: 0.10, end: 0.001 }, 0.07);
+    },
+    shootLaser() {
+        this._play({ type: 'sawtooth', freq: 600, freqSlide: 1400 }, { start: 0.08, end: 0.001 }, 0.12);
+    },
+    shootMissile() {
+        this._play({ type: 'sawtooth', freq: 200, freqEnd: 100 }, { start: 0.15, end: 0.001 }, 0.15);
+    },
+    shootHybrid() {
+        this._play({ type: 'square', freq: 1000, freqEnd: 500 }, { start: 0.10, end: 0.001 }, 0.06);
+    },
+
+    enemyHit() {
+        this._play({ type: 'triangle', freq: 300, freqEnd: 150 }, { start: 0.15, end: 0.001 }, 0.08);
+    },
+    enemyDestroy(big) {
+        if (big) {
+            this._playNoise(0.25, 0.35, 0.001);
+            this._play({ type: 'sawtooth', freq: 100, freqEnd: 30 }, { start: 0.2, end: 0.001 }, 0.3);
+        } else {
+            this._playNoise(0.12, 0.2, 0.001);
+            this._play({ type: 'sawtooth', freq: 150, freqEnd: 50 }, { start: 0.12, end: 0.001 }, 0.15);
+        }
+    },
+
+    playerHit() {
+        this._play({ type: 'sawtooth', freq: 200, freqEnd: 80 }, { start: 0.25, end: 0.001 }, 0.15);
+        this._play({ type: 'square', freq: 120, freqEnd: 60 }, { start: 0.15, end: 0.001 }, 0.1);
+    },
+
+    powerupCollect() {
+        this._play({ type: 'sine', freq: 523, freqEnd: 1047 }, { start: 0.2, end: 0.001 }, 0.12);
+        setTimeout(() => {
+            this._play({ type: 'sine', freq: 784, freqEnd: 1568 }, { start: 0.15, end: 0.001 }, 0.1);
+        }, 60);
+    },
+
+    shieldActivate() {
+        this._play({ type: 'sine', freq: 440, freqSlide: 880 }, { start: 0.2, end: 0.001 }, 0.2);
+    },
+    shieldBreak() {
+        this._playNoise(0.15, 0.3, 0.001);
+        this._play({ type: 'sawtooth', freq: 880, freqEnd: 220 }, { start: 0.2, end: 0.001 }, 0.2);
+    },
+
+    bossWarning() {
+        const playBeep = (hi) => {
+            this._play({ type: 'square', freq: hi ? 800 : 400 }, { start: 0.3, end: 0.001 }, 0.12);
+        };
+        playBeep(true);
+        setTimeout(() => playBeep(false), 150);
+        setTimeout(() => playBeep(true), 300);
+        setTimeout(() => playBeep(false), 450);
+    },
+
+    bossDestroy() {
+        // Multi-stage explosion sound
+        this._playNoise(0.5, 0.5, 0.001);
+        this._play({ type: 'sawtooth', freq: 80, freqEnd: 20 }, { start: 0.4, end: 0.001 }, 0.5);
+        setTimeout(() => {
+            this._playNoise(0.3, 0.35, 0.001);
+            this._play({ type: 'square', freq: 60, freqEnd: 15 }, { start: 0.25, end: 0.001 }, 0.3);
+        }, 200);
+        setTimeout(() => {
+            this._playNoise(0.2, 0.25, 0.001);
+        }, 400);
+    },
+
+    bossPhaseTransition() {
+        this._play({ type: 'sawtooth', freq: 220, freqEnd: 880 }, { start: 0.3, end: 0.001 }, 0.2);
+        this._playNoise(0.1, 0.2, 0.001);
+    },
+
+    waveStart() {
+        this._play({ type: 'sine', freq: 330 }, { start: 0.15, end: 0.001 }, 0.15);
+        setTimeout(() => {
+            this._play({ type: 'sine', freq: 440 }, { start: 0.15, end: 0.001 }, 0.15);
+        }, 100);
+        setTimeout(() => {
+            this._play({ type: 'sine', freq: 550 }, { start: 0.15, end: 0.001 }, 0.2);
+        }, 200);
+    },
+
+    gameOver() {
+        this._play({ type: 'sine', freq: 440, freqEnd: 220 }, { start: 0.3, end: 0.001 }, 0.4);
+        setTimeout(() => {
+            this._play({ type: 'sine', freq: 330, freqEnd: 165 }, { start: 0.3, end: 0.001 }, 0.4);
+        }, 300);
+        setTimeout(() => {
+            this._play({ type: 'sine', freq: 220, freqEnd: 110 }, { start: 0.3, end: 0.001 }, 0.5);
+        }, 600);
+    },
+
+    combo() {
+        this._play({ type: 'sine', freq: 660, freqEnd: 990 }, { start: 0.15, end: 0.001 }, 0.08);
+    },
+};
+
 // ==================== GAME STATE ====================
 let highScore = parseInt(localStorage.getItem('skyFighterHighScore') || '0', 10);
 highScoreValue.textContent = highScore;
@@ -68,6 +277,11 @@ let screenShake = 0;
 let screenFlash = 0;
 let bossWarningTimer = 0;
 
+// Combo system
+let comboCount = 0;
+let comboTimer = 0;
+const COMBO_TIMEOUT = 120; // 2 seconds at 60fps
+
 // Input
 const keys = {};
 let mouseX = GAME_WIDTH / 2;
@@ -83,8 +297,11 @@ let enemies = [];
 let particles = [];
 let powerups = [];
 let stars = [];
+let nebulae = [];
+let dustStars = [];
 let explosions = [];
 let floatingTexts = [];
+let debris = [];
 
 // Wave management
 let waveTimer = 0;
@@ -109,14 +326,57 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// ==================== STAR FIELD ====================
+// ==================== STAR FIELD (Three-layer Parallax) ====================
+const NEBULA_COLORS = [
+    { inner: '#2244aa', outer: '#111166' },
+    { inner: '#4422aa', outer: '#221166' },
+    { inner: '#2266aa', outer: '#113355' },
+    { inner: '#aa2266', outer: '#551133' },
+    { inner: '#22aa66', outer: '#115533' },
+];
+
 function initStars() {
+    // Layer 1: Far - Nebulae (large slow-moving color clouds)
+    nebulae = [];
+    for (let i = 0; i < 5; i++) {
+        const colors = NEBULA_COLORS[Math.floor(Math.random() * NEBULA_COLORS.length)];
+        nebulae.push({
+            x: Math.random() * GAME_WIDTH,
+            y: Math.random() * GAME_HEIGHT,
+            w: 80 + Math.random() * 160,
+            h: 40 + Math.random() * 80,
+            speed: 0.3 + Math.random() * 0.2,
+            alpha: 0.06 + Math.random() * 0.08,
+            innerColor: colors.inner,
+            outerColor: colors.outer,
+        });
+    }
+
+    // Layer 2: Mid - Dust stars (small dim colored dots)
+    dustStars = [];
+    for (let i = 0; i < 80; i++) {
+        const hue = Math.random();
+        const color = hue < 0.4 ? '#aaccff'
+            : hue < 0.7 ? '#ccaaee'
+            : hue < 0.85 ? '#eeddaa'
+            : '#aaffcc';
+        dustStars.push({
+            x: Math.random() * GAME_WIDTH,
+            y: Math.random() * GAME_HEIGHT,
+            speed: 0.8 + Math.random() * 0.7,
+            size: 0.8 + Math.random() * 1.2,
+            brightness: 0.15 + Math.random() * 0.25,
+            color,
+        });
+    }
+
+    // Layer 3: Near - Bright stars (original, fast white stars)
     stars = [];
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 100; i++) {
         stars.push({
             x: Math.random() * GAME_WIDTH,
             y: Math.random() * GAME_HEIGHT,
-            speed: 0.3 + Math.random() * 2,
+            speed: 1.5 + Math.random() * 1.5,
             size: 0.5 + Math.random() * 2,
             brightness: 0.3 + Math.random() * 0.7,
         });
@@ -124,6 +384,23 @@ function initStars() {
 }
 
 function updateStars() {
+    // Nebulae
+    for (const n of nebulae) {
+        n.y += n.speed;
+        if (n.y > GAME_HEIGHT + n.h) {
+            n.y = -n.h;
+            n.x = Math.random() * GAME_WIDTH;
+        }
+    }
+    // Dust
+    for (const d of dustStars) {
+        d.y += d.speed;
+        if (d.y > GAME_HEIGHT) {
+            d.y = -2;
+            d.x = Math.random() * GAME_WIDTH;
+        }
+    }
+    // Bright stars
     for (const s of stars) {
         s.y += s.speed;
         if (s.y > GAME_HEIGHT) {
@@ -134,6 +411,28 @@ function updateStars() {
 }
 
 function drawStars() {
+    // Layer 1: Nebulae (gradient ellipses)
+    for (const n of nebulae) {
+        ctx.globalAlpha = n.alpha;
+        const grad = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, n.w / 2);
+        grad.addColorStop(0, n.innerColor);
+        grad.addColorStop(1, n.outerColor);
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.ellipse(n.x, n.y, n.w / 2, n.h / 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Layer 2: Dust stars (small dim colored dots)
+    for (const d of dustStars) {
+        ctx.globalAlpha = d.brightness;
+        ctx.fillStyle = d.color;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, d.size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Layer 3: Bright stars (fast white stars)
     for (const s of stars) {
         ctx.globalAlpha = s.brightness;
         ctx.fillStyle = '#ffffff';
@@ -250,6 +549,80 @@ function drawFloatingTexts() {
         ctx.font = 'bold 16px Arial';
         ctx.textAlign = 'center';
         ctx.fillText(ft.text, ft.x, ft.y);
+    }
+    ctx.globalAlpha = 1;
+}
+
+// ==================== DEBRIS (Boss Death Fragments) ====================
+function spawnDebris(x, y, count, color) {
+    for (let i = 0; i < count; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const spd = 2 + Math.random() * 6;
+        debris.push({
+            x, y,
+            vx: Math.cos(angle) * spd,
+            vy: Math.sin(angle) * spd - Math.random() * 2,
+            w: 4 + Math.random() * 10,
+            h: 2 + Math.random() * 6,
+            rotation: Math.random() * Math.PI * 2,
+            rotSpeed: (Math.random() - 0.5) * 0.15,
+            life: 80 + Math.random() * 40,
+            maxLife: 120,
+            color: color || '#aaaaaa',
+            trail: [],
+        });
+    }
+}
+
+function updateDebris() {
+    for (let i = debris.length - 1; i >= 0; i--) {
+        const d = debris[i];
+        d.x += d.vx;
+        d.y += d.vy;
+        d.vy += 0.08; // gravity
+        d.vx *= 0.98;
+        d.rotation += d.rotSpeed;
+        d.life--;
+
+        // Trail
+        d.trail.push({ x: d.x, y: d.y, life: 8 });
+        if (d.trail.length > 5) d.trail.shift();
+
+        if (d.life <= 0 || d.y > GAME_HEIGHT + 20) {
+            debris.splice(i, 1);
+        }
+    }
+}
+
+function drawDebris() {
+    for (const d of debris) {
+        const alpha = d.life / d.maxLife;
+
+        // Trail
+        for (const t of d.trail) {
+            t.life--;
+            ctx.globalAlpha = (t.life / 8) * alpha * 0.3;
+            ctx.fillStyle = d.color;
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        for (let j = d.trail.length - 1; j >= 0; j--) {
+            if (d.trail[j].life <= 0) d.trail.splice(j, 1);
+        }
+
+        // Fragment
+        ctx.globalAlpha = alpha;
+        ctx.save();
+        ctx.translate(d.x, d.y);
+        ctx.rotate(d.rotation);
+        ctx.fillStyle = d.color;
+        ctx.fillRect(-d.w / 2, -d.h / 2, d.w, d.h);
+        // Bright edge
+        ctx.strokeStyle = `rgba(255, 200, 100, ${alpha * 0.6})`;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(-d.w / 2, -d.h / 2, d.w, d.h);
+        ctx.restore();
     }
     ctx.globalAlpha = 1;
 }
@@ -415,6 +788,13 @@ function playerShoot() {
     const p = player;
     const wp = p.weapon;
 
+    // Play weapon-specific shooting sound
+    if (wp === 'NORMAL') SoundManager.shootNormal();
+    else if (wp === 'SPREAD') SoundManager.shootSpread();
+    else if (wp === 'LASER') SoundManager.shootLaser();
+    else if (wp === 'MISSILE') SoundManager.shootMissile();
+    else if (wp === 'HYBRID') SoundManager.shootHybrid();
+
     if (wp === 'NORMAL' || wp === 'SPREAD') {
         // Center bullet
         bullets.push(createBullet(p.x, p.y - p.h / 2, 0, -BULLET_SPEED, '#88ccff', 4, 8));
@@ -495,12 +875,14 @@ function hitPlayer() {
         player.shieldTimer = 0;
         player.invincibleTimer = 30;
         spawnParticles(player.x, player.y, 15, '#ffdd44', 4, 25, 3);
+        SoundManager.shieldBreak();
         return;
     }
     player.hp--;
     player.invincibleTimer = 60;
     screenShake = 8;
     spawnParticles(player.x, player.y, 20, '#ff4444', 3, 30, 2);
+    SoundManager.playerHit();
     updateHUD();
     if (player.hp <= 0) {
         gameOver();
@@ -548,6 +930,7 @@ function updateBullets() {
             if (circleRect(b.x, b.y, b.w / 2, e.x - e.w / 2, e.y - e.h / 2, e.w, e.h)) {
                 e.hp -= b.damage;
                 spawnParticles(b.x, b.y, 3, b.color, 2, 15, 2);
+                SoundManager.enemyHit();
                 if (e.hp <= 0) {
                     destroyEnemy(j);
                 }
@@ -946,13 +1329,27 @@ function destroyEnemy(index) {
     const e = enemies[index];
     if (!e) return;
     enemies.splice(index, 1);
-    score += e.score;
     enemiesDestroyedTotal++;
     waveEnemiesKilled++;
 
+    // Combo system
+    comboCount++;
+    comboTimer = COMBO_TIMEOUT;
+    const multiplier = Math.min(1 + comboCount * 0.1, 3); // max 3x
+    const comboScore = Math.floor(e.score * multiplier);
+    score += comboScore;
+
     spawnExplosion(e.x, e.y, e.type === 'bomber');
     spawnParticles(e.x, e.y, 15, e.color, 3, 30, 3);
-    addFloatingText(e.x, e.y - 20, `+${e.score}`, '#ffff88');
+    SoundManager.enemyDestroy(e.type === 'bomber');
+    if (comboCount > 2) SoundManager.combo();
+
+    // Show score with multiplier info
+    if (comboCount > 1) {
+        addFloatingText(e.x, e.y - 20, `+${comboScore} (x${multiplier.toFixed(1)})`, '#ffff88');
+    } else {
+        addFloatingText(e.x, e.y - 20, `+${e.score}`, '#ffff88');
+    }
 
     // Drop power-up
     if (Math.random() < 0.15 + (e.type === 'bomber' ? 0.3 : 0)) {
@@ -1279,10 +1676,16 @@ function updateBoss() {
 
     // Fight phase advancement for multi-phase bosses
     const fp = boss.fightPhases || 1;
+    const prevPhase = boss.fightPhase;
     if (fp >= 3 && boss.hp <= boss.maxHp * 0.33) {
         boss.fightPhase = 3;
     } else if (fp >= 2 && boss.hp <= boss.maxHp * 0.5) {
         boss.fightPhase = 2;
+    }
+    // Play phase transition sound
+    if (boss.fightPhase > prevPhase) {
+        SoundManager.bossPhaseTransition();
+        spawnParticles(boss.x, boss.y, 20, boss.accentColor, 4, 30, 3);
     }
 
     if (boss.phase === 'enter') {
@@ -1629,28 +2032,68 @@ function drawBoss() {
 function destroyBoss() {
     score += boss.score;
     bossesDefeatedTotal++;
-    spawnExplosion(boss.x, boss.y, true);
-    spawnParticles(boss.x, boss.y, 50, '#ff4444', 5, 50, 4);
-    spawnParticles(boss.x, boss.y, 30, '#ffaa44', 4, 40, 3);
-    addFloatingText(boss.x, boss.y - 40, `BOSS DEFEATED! +${boss.score}`, '#ffdd44');
-    screenShake = 20;
-    screenFlash = 0.8;
 
-    // Drop multiple power-ups (capture position before boss is nulled)
-    const dropX = boss.x;
-    const dropY = boss.y;
+    // Capture boss position and info before nulled
+    const bx = boss.x;
+    const by = boss.y;
+    const bw = boss.w;
+    const bh = boss.h;
+    const bColor = boss.color;
+    const bAccent = boss.accentColor;
+
+    // Stage 1: Main explosion - massive blast at boss center
+    SoundManager.bossDestroy();
+    spawnExplosion(bx, by, true);
+    spawnParticles(bx, by, 50, '#ff4444', 5, 50, 4);
+    spawnParticles(bx, by, 30, '#ffaa44', 4, 40, 3);
+    spawnParticles(bx, by, 20, '#ffffff', 6, 30, 2);
+    screenShake = 30;
+    screenFlash = 1.0;
+    addFloatingText(bx, by - 40, `BOSS DEFEATED! +${boss.score}`, '#ffdd44');
+
+    // Metal debris fragments
+    spawnDebris(bx, by, 15, '#aaaaaa');
+    spawnDebris(bx, by, 8, '#ff8844');
+
+    // Stage 2: Delayed sub-explosions around boss perimeter (0.3s later)
+    setTimeout(() => {
+        if (gameState !== 'playing' && gameState !== 'paused') return;
+        const subCount = 3 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < subCount; i++) {
+            const sx = bx + (Math.random() - 0.5) * bw * 1.5;
+            const sy = by + (Math.random() - 0.5) * bh * 1.5;
+            spawnExplosion(sx, sy, false);
+            spawnParticles(sx, sy, 15, bAccent, 4, 35, 3);
+            spawnParticles(sx, sy, 8, '#ffffff', 5, 20, 2);
+        }
+        screenShake = Math.max(screenShake, 15);
+        screenFlash = Math.max(screenFlash, 0.4);
+        spawnDebris(bx, by, 10, '#cccccc');
+    }, 300);
+
+    // Stage 3: Final shockwave + more debris (0.6s later)
+    setTimeout(() => {
+        if (gameState !== 'playing' && gameState !== 'paused') return;
+        spawnExplosion(bx, by, true);
+        spawnParticles(bx, by, 40, bAccent, 6, 45, 3);
+        spawnParticles(bx, by, 20, '#ffdd44', 5, 35, 2);
+        spawnDebris(bx, by, 8, '#ffcc88');
+        screenShake = Math.max(screenShake, 20);
+        screenFlash = Math.max(screenFlash, 0.6);
+    }, 600);
+
+    // Drop multiple power-ups
     for (let i = 0; i < 3; i++) {
         setTimeout(() => {
             if (gameState === 'playing') {
-                spawnPowerup(dropX + (Math.random() - 0.5) * 60, dropY + (Math.random() - 0.5) * 40);
+                spawnPowerup(bx + (Math.random() - 0.5) * 60, by + (Math.random() - 0.5) * 40);
             }
-        }, i * 200);
+        }, 400 + i * 200);
     }
 
     boss = null;
     bossActive = false;
     bossHud.classList.add('hidden');
-    // Reset wave state so the next wave starts correctly
     waveActive = false;
     waveTransitionTimer = 0;
     updateHUD();
@@ -1690,11 +2133,13 @@ function updatePowerups() {
 }
 
 function collectPowerup(pu) {
+    SoundManager.powerupCollect();
     if (pu.type === 'HEALTH') {
         player.hp = Math.min(player.maxHp, player.hp + 1);
         addFloatingText(pu.x, pu.y, '+1 HP', '#ffffff');
     } else if (pu.type === 'SHIELD') {
         player.shieldTimer = 600; // 10 seconds
+        SoundManager.shieldActivate();
         addFloatingText(pu.x, pu.y, 'SHIELD!', '#ffdd44');
     } else {
         // Weapon power-ups
@@ -1766,6 +2211,7 @@ function drawPowerups() {
 function startWave() {
     waveActive = true;
     waveEnemyCount = 5 + wave * 3;
+    SoundManager.waveStart();
     waveEnemiesSpawned = 0;
     waveEnemiesKilled = 0;
     waveTimer = 0;
@@ -1837,6 +2283,7 @@ function spawnWaveEnemy() {
 function startBossFight() {
     bossWarningTimer = 180; // 3 seconds warning
     bossActive = true;
+    SoundManager.bossWarning();
     // Pre-determine boss type for warning text
     const bType = getBossType();
     const def = BOSS_DEFS[bType];
@@ -1885,9 +2332,46 @@ function updateHUD() {
     else if (hpRatio > 0.3) hpBarFill.style.background = 'linear-gradient(90deg, #ffaa00, #ffdd44)';
     else hpBarFill.style.background = 'linear-gradient(90deg, #ff2222, #ff6644)';
 
-    // Weapon name
-    weaponName.textContent = player ? WEAPON_NAMES[player.weapon === 'NORMAL' ? 0 : player.weapon === 'SPREAD' ? 1 : player.weapon === 'LASER' ? 2 : player.weapon === 'MISSILE' ? 3 : 4] : 'NORMAL';
-    weaponName.style.color = player && player.weapon !== 'NORMAL' ? POWERUP_TYPES[player.weapon.toUpperCase()]?.color || '#88ccff' : '#88ccff';
+    // Shield bar
+    if (player && player.shieldTimer > 0) {
+        shieldBarTrack.classList.remove('hidden');
+        const shieldRatio = player.shieldTimer / 600;
+        shieldBarFill.style.width = `${shieldRatio * 100}%`;
+    } else {
+        shieldBarTrack.classList.add('hidden');
+    }
+
+    // Weapon name + icon + level
+    const wpName = player ? WEAPON_NAMES[player.weapon === 'NORMAL' ? 0 : player.weapon === 'SPREAD' ? 1 : player.weapon === 'LASER' ? 2 : player.weapon === 'MISSILE' ? 3 : 4] : 'NORMAL';
+    const wpColor = player && player.weapon !== 'NORMAL' ? POWERUP_TYPES[player.weapon.toUpperCase()]?.color || '#88ccff' : '#88ccff';
+    weaponName.textContent = wpName;
+    weaponName.style.color = wpColor;
+    weaponIcon.style.background = wpColor;
+    weaponIcon.style.boxShadow = `0 0 6px ${wpColor}`;
+    if (player && player.weapon !== 'NORMAL') {
+        weaponLevel.textContent = `Lv.${player.weaponLevel}`;
+    } else {
+        weaponLevel.textContent = '';
+    }
+
+    // Combo counter
+    if (comboCount > 1) {
+        comboPanel.classList.remove('hidden');
+        comboCountEl.textContent = comboCount;
+        // Dynamic styling based on combo count
+        if (comboCount >= 10) {
+            comboCountEl.style.fontSize = '42px';
+            comboCountEl.style.color = '#ff4444';
+        } else if (comboCount >= 5) {
+            comboCountEl.style.fontSize = '36px';
+            comboCountEl.style.color = '#ffaa44';
+        } else {
+            comboCountEl.style.fontSize = '36px';
+            comboCountEl.style.color = '#ffdd44';
+        }
+    } else {
+        comboPanel.classList.add('hidden');
+    }
 
     // Boss HP
     if (boss) {
@@ -1904,6 +2388,7 @@ function updateHUD() {
 // ==================== GAME OVER ====================
 function gameOver() {
     gameState = 'gameover';
+    SoundManager.gameOver();
     spawnExplosion(player.x, player.y, true);
     spawnParticles(player.x, player.y, 40, '#66aaff', 5, 50, 3);
 
@@ -1943,8 +2428,12 @@ function initGame() {
     enemies = [];
     particles = [];
     powerups = [];
+    stars = [];
+    nebulae = [];
+    dustStars = [];
     explosions = [];
     floatingTexts = [];
+    debris = [];
     boss = null;
     bossActive = false;
     wave = 1;
@@ -1958,12 +2447,16 @@ function initGame() {
     bossWarningTimer = 0;
     screenShake = 0;
     screenFlash = 0;
+    comboCount = 0;
+    comboTimer = 0;
 
     initStars();
     updateHUD();
 }
 
 function startGame() {
+    SoundManager.init();
+    SoundManager.resume();
     initGame();
     gameState = 'playing';
     menuScreen.classList.add('hidden');
@@ -1993,11 +2486,20 @@ function update() {
     if (boss) updateBoss();
     updateParticles();
     updateExplosions();
+    updateDebris();
     updateFloatingTexts();
 
-    // Screen effects
-    if (screenShake > 0) screenShake *= 0.9;
-    if (screenFlash > 0) screenFlash -= 0.03;
+    // Screen effects - slower decay for boss death impacts
+    if (screenShake > 0) screenShake *= 0.88;
+    if (screenFlash > 0) screenFlash -= 0.02;
+
+    // Combo timer
+    if (comboTimer > 0) {
+        comboTimer--;
+        if (comboTimer <= 0) {
+            comboCount = 0;
+        }
+    }
 
     // Update HUD periodically
     if (frameCount % 10 === 0) updateHUD();
@@ -2032,6 +2534,7 @@ function draw() {
         drawBullets();
         drawParticles();
         drawExplosions();
+        drawDebris();
         if (player) drawPlayer();
         drawFloatingTexts();
 
@@ -2148,6 +2651,37 @@ pauseMenuBtn.addEventListener('click', () => {
     gameState = 'menu';
     menuHighScoreVal.textContent = highScore;
 });
+
+// Mute button handlers
+function updateMuteButtons() {
+    const icon = SoundManager.muted ? '\u{1F507}' : '\u{1F506}';
+    muteBtnMenu.innerHTML = icon;
+    muteBtnHud.innerHTML = icon;
+    if (SoundManager.muted) {
+        muteBtnMenu.classList.add('muted');
+        muteBtnHud.classList.add('muted');
+    } else {
+        muteBtnMenu.classList.remove('muted');
+        muteBtnHud.classList.remove('muted');
+    }
+}
+
+function toggleMute() {
+    SoundManager.init();
+    SoundManager.toggleMute();
+    updateMuteButtons();
+}
+
+muteBtnMenu.addEventListener('click', toggleMute);
+muteBtnHud.addEventListener('click', toggleMute);
+
+// Initialize mute button state from localStorage
+if (SoundManager.muted) {
+    muteBtnMenu.classList.add('muted');
+    muteBtnHud.classList.add('muted');
+    muteBtnMenu.innerHTML = '\u{1F507}';
+    muteBtnHud.innerHTML = '\u{1F507}';
+}
 
 function resumeGame() {
     gameState = 'playing';

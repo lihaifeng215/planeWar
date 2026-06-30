@@ -25,9 +25,18 @@
                 <div id="hp-bar-track">
                     <div id="hp-bar-fill"></div>
                 </div>
+                <div id="shield-bar-track" class="hidden">
+                    <div id="shield-bar-fill"></div>
+                </div>
             </div>
             <div id="weapon-panel">
+                <div id="weapon-icon"></div>
                 <span id="weapon-name">NORMAL</span>
+                <span id="weapon-level"></span>
+            </div>
+            <div id="combo-panel" class="hidden">
+                <span id="combo-count">0</span>
+                <span id="combo-label">COMBO</span>
             </div>
             <div id="boss-hud" class="hidden">
                 <div id="boss-hp-track">
@@ -39,6 +48,7 @@
                 <span class="label">WAVE</span>
                 <span id="wave-value">1</span>
             </div>
+            <button type="button" id="mute-btn-hud" class="mute-btn">&#128266;</button>
         </div>
 
         <!-- Menu Screen -->
@@ -52,6 +62,7 @@
                 <p>Collect power-ups to upgrade your arsenal!</p>
             </div>
             <button type="button" id="start-btn">START GAME</button>
+            <button type="button" id="mute-btn-menu" class="mute-btn">&#128266;</button>
             <div id="menu-high-score">High Score: <span id="menu-high-score-val">0</span></div>
         </div>
 
